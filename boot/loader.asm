@@ -1,8 +1,6 @@
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ;                               loader.asm
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-;                                                     Forrest Yu, 2005
-; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 org  0100h
 
@@ -14,41 +12,70 @@ jmp	LABEL_START		; Start
 %include	"pm.inc"
 
 
+; 定义 GDT 表，就是描述符数组
 ; GDT ------------------------------------------------------------------------------------------------------------------------------------------------------------
-;                                                段基址            段界限     , 属性
-LABEL_GDT:			Descriptor             0,                    0, 0						; 空描述符
-LABEL_DESC_FLAT_C:		Descriptor             0,              0fffffh, DA_CR  | DA_32 | DA_LIMIT_4K			; 0 ~ 4G
-LABEL_DESC_FLAT_RW:		Descriptor             0,              0fffffh, DA_DRW | DA_32 | DA_LIMIT_4K			; 0 ~ 4G
-LABEL_DESC_VIDEO:		Descriptor	 0B8000h,               0ffffh, DA_DRW                         | DA_DPL3	; 显存首地址
+;  label                   宏名              段基址            段界限         属性
+LABEL_GDT:		    	Descriptor             0,              0, 0						                       ; 空描述符
+LABEL_DESC_FLAT_C:		Descriptor             0,              0fffffh,      DA_CR  | DA_32 | DA_LIMIT_4K	   ; 代码段描述符（读 / 执行）
+LABEL_DESC_FLAT_RW:		Descriptor             0,              0fffffh,      DA_DRW | DA_32 | DA_LIMIT_4K	   ; 数据段描述符（读 / 写）
+LABEL_DESC_VIDEO:		Descriptor	           0B8000h,        0ffffh,       DA_DRW | DA_DPL3	               ; 显存描述符（读 / 写、DPL3）
 ; GDT ------------------------------------------------------------------------------------------------------------------------------------------------------------
 
+; GDT 长度常量
 GdtLen		equ	$ - LABEL_GDT
-GdtPtr		dw	GdtLen - 1				; 段界限
-		dd	BaseOfLoaderPhyAddr + LABEL_GDT		; 基地址
 
+; GDT长度和地址，用于 lgdt 和 sgdt 与 gdtr 之间存读 gdt 数据的结构 
+GdtPtr		dw	GdtLen - 1				            ; 段界限
+		    dd	BaseOfLoaderPhyAddr + LABEL_GDT		; 基地址
+
+
+; 选择子结构：GDT 指针+ RPL 权限
 ; GDT 选择子 ----------------------------------------------------------------------------------
-SelectorFlatC		equ	LABEL_DESC_FLAT_C	- LABEL_GDT
-SelectorFlatRW		equ	LABEL_DESC_FLAT_RW	- LABEL_GDT
-SelectorVideo		equ	LABEL_DESC_VIDEO	- LABEL_GDT + SA_RPL3
+SelectorFlatC		equ	LABEL_DESC_FLAT_C	- LABEL_GDT           ; 代码段选择子
+SelectorFlatRW		equ	LABEL_DESC_FLAT_RW	- LABEL_GDT           ; 数据段选择子
+SelectorVideo		equ	LABEL_DESC_VIDEO	- LABEL_GDT + SA_RPL3 ; 显存段选择子
 ; GDT 选择子 ----------------------------------------------------------------------------------
 
 
+; 堆栈基址
 BaseOfStack	equ	0100h
 
+;============================================================================
+;变量
+;----------------------------------------------------------------------------
+wRootDirSizeForLoop	dw	RootDirSectors	; Root Directory 占用的扇区数
+wSectorNo		    dw	0		        ; 要读取的扇区号
+bOdd			    db	0		        ; 奇数还是偶数
+dwKernelSize		dd	0		        ; KERNEL.BIN 文件大小
 
-LABEL_START:			; <--- 从这里开始 *************
+;============================================================================
+;字符串
+;----------------------------------------------------------------------------
+KernelFileName		db	"KERNEL  BIN", 0	; KERNEL.BIN 之文件名
+; 为简化代码, 下面每个字符串的长度均为 MessageLength
+MessageLength		equ	9
+LoadMessage:		db	"Loading  "
+Message1		    db	"Ready.   "
+Message2	    	db	"No KERNEL"
+;============================================================================
+
+
+; <--- 从这里开始 *************
+LABEL_START:
+    ; 寄存器初始化
 	mov	ax, cs
 	mov	ds, ax
 	mov	es, ax
 	mov	ss, ax
 	mov	sp, BaseOfStack
 
-	mov	dh, 0			; "Loading  "
-	call	DispStrRealMode		; 显示字符串
+    ; 显示字符串  "Loading  "
+	mov	dh, 0		
+	call	DispStrRealMode		
 
 	; 得到内存数
 	mov	ebx, 0			; ebx = 后续值, 开始时需为 0
-	mov	di, _MemChkBuf		; es:di 指向一个地址范围描述符结构（Address Range Descriptor Structure）
+	mov	di, _MemChkBuf	; es:di 指向一个地址范围描述符结构（Address Range Descriptor Structure）
 .MemChkLoop:
 	mov	eax, 0E820h		; eax = 0000E820h
 	mov	ecx, 20			; ecx = 地址范围描述符结构的大小
@@ -68,32 +95,32 @@ LABEL_START:			; <--- 从这里开始 *************
 	mov	word [wSectorNo], SectorNoOfRootDirectory	
 	xor	ah, ah	; ┓
 	xor	dl, dl	; ┣ 软驱复位
-	int	13h	; ┛
+	int	13h	    ; ┛
 LABEL_SEARCH_IN_ROOT_DIR_BEGIN:
 	cmp	word [wRootDirSizeForLoop], 0	; ┓
-	jz	LABEL_NO_KERNELBIN		; ┣ 判断根目录区是不是已经读完, 如果读完表示没有找到 KERNEL.BIN
-	dec	word [wRootDirSizeForLoop]	; ┛
+	jz	LABEL_NO_KERNELBIN	        	; ┣ 判断根目录区是不是已经读完, 如果读完表示没有找到 KERNEL.BIN
+	dec	word [wRootDirSizeForLoop]  	; ┛
 	mov	ax, BaseOfKernelFile
-	mov	es, ax			; es <- BaseOfKernelFile
+	mov	es, ax			        ; es <- BaseOfKernelFile
 	mov	bx, OffsetOfKernelFile	; bx <- OffsetOfKernelFile	于是, es:bx = BaseOfKernelFile:OffsetOfKernelFile = BaseOfKernelFile * 10h + OffsetOfKernelFile
-	mov	ax, [wSectorNo]		; ax <- Root Directory 中的某 Sector 号
+	mov	ax, [wSectorNo]		    ; ax <- Root Directory 中的某 Sector 号
 	mov	cl, 1
 	call	ReadSector
 
-	mov	si, KernelFileName	; ds:si -> "KERNEL  BIN"
+	mov	si, KernelFileName	    ; ds:si -> "KERNEL  BIN"
 	mov	di, OffsetOfKernelFile	; es:di -> BaseOfKernelFile:???? = BaseOfKernelFile*10h+????
 	cld
 	mov	dx, 10h
 LABEL_SEARCH_FOR_KERNELBIN:
-	cmp	dx, 0					; ┓
+	cmp	dx, 0					            ; ┓
 	jz	LABEL_GOTO_NEXT_SECTOR_IN_ROOT_DIR	; ┣ 循环次数控制, 如果已经读完了一个 Sector, 就跳到下一个 Sector
-	dec	dx					; ┛
+	dec	dx					                ; ┛
 	mov	cx, 11
 LABEL_CMP_FILENAME:
-	cmp	cx, 0			; ┓
+	cmp	cx, 0		           	; ┓
 	jz	LABEL_FILENAME_FOUND	; ┣ 循环次数控制, 如果比较了 11 个字符都相等, 表示找到
-	dec	cx			; ┛
-	lodsb				; ds:si -> al
+	dec	cx			            ; ┛
+	lodsb				    ; ds:si -> al
 	cmp	al, byte [es:di]	; if al == es:di
 	jz	LABEL_GO_ON
 	jmp	LABEL_DIFFERENT
@@ -102,9 +129,9 @@ LABEL_GO_ON:
 	jmp	LABEL_CMP_FILENAME	;	继续循环
 
 LABEL_DIFFERENT:
-	and	di, 0FFE0h		; else┓	这时di的值不知道是什么, di &= e0 为了让它是 20h 的倍数
-	add	di, 20h			;     ┃
-	mov	si, KernelFileName	;     ┣ di += 20h  下一个目录条目
+	and	di, 0FFE0h		        ; else┓	这时di的值不知道是什么, di &= e0 为了让它是 20h 的倍数
+	add	di, 20h			        ;     ┃
+	mov	si, KernelFileName	    ;     ┣ di += 20h  下一个目录条目
 	jmp	LABEL_SEARCH_FOR_KERNELBIN;   ┛
 
 LABEL_GOTO_NEXT_SECTOR_IN_ROOT_DIR:
@@ -112,11 +139,14 @@ LABEL_GOTO_NEXT_SECTOR_IN_ROOT_DIR:
 	jmp	LABEL_SEARCH_IN_ROOT_DIR_BEGIN
 
 LABEL_NO_KERNELBIN:
-	mov	dh, 2			; "No KERNEL."
-	call	DispStrRealMode		; 显示字符串
+    ; 显示字符串 "No KERNEL."
+	mov	dh, 2			         
+	call	DispStrRealMode		
 	jmp	$			; 没有找到 KERNEL.BIN, 死循环在这里
 
-LABEL_FILENAME_FOUND:			; 找到 KERNEL.BIN 后便来到这里继续
+
+; 找到 KERNEL.BIN 后便来到这里继续
+LABEL_FILENAME_FOUND:			
 	mov	ax, RootDirSectors
 	and	di, 0FFF0h		; di -> 当前条目的开始
 
@@ -141,13 +171,13 @@ LABEL_GOON_LOADING_FILE:
 	mov	ah, 0Eh			; ┃ 每读一个扇区就在 "Loading  " 后面打一个点, 形成这样的效果:
 	mov	al, '.'			; ┃
 	mov	bl, 0Fh			; ┃ Loading ......
-	int	10h			; ┃
-	pop	bx			; ┃
-	pop	ax			; ┛
+	int	10h		    	; ┃
+	pop	bx		    	; ┃
+	pop	ax		    	; ┛
 
 	mov	cl, 1
 	call	ReadSector
-	pop	ax			; 取出此 Sector 在 FAT 中的序号
+	pop	ax			    ; 取出此 Sector 在 FAT 中的序号
 	call	GetFATEntry
 	cmp	ax, 0FFFh
 	jz	LABEL_FILE_LOADED
@@ -161,8 +191,9 @@ LABEL_FILE_LOADED:
 
 	call	KillMotor		; 关闭软驱马达
 
-	mov	dh, 1			; "Ready."
-	call	DispStrRealMode		; 显示字符串
+    ; 显示字符串 "Ready."
+	mov	dh, 1		    	; 
+	call	DispStrRealMode		
 	
 ; 下面准备跳入保护模式 -------------------------------------------
 
@@ -186,24 +217,89 @@ LABEL_FILE_LOADED:
 	jmp	dword SelectorFlatC:(BaseOfLoaderPhyAddr+LABEL_PM_START)
 
 
-;============================================================================
-;变量
-;----------------------------------------------------------------------------
-wRootDirSizeForLoop	dw	RootDirSectors	; Root Directory 占用的扇区数
-wSectorNo		dw	0		; 要读取的扇区号
-bOdd			db	0		; 奇数还是偶数
-dwKernelSize		dd	0		; KERNEL.BIN 文件大小
+; 从此以后的代码在保护模式下执行 ----------------------------------------------------
+; 32 位代码段. 由实模式跳入 ---------------------------------------------------------
+[SECTION .s32]
 
-;============================================================================
-;字符串
-;----------------------------------------------------------------------------
-KernelFileName		db	"KERNEL  BIN", 0	; KERNEL.BIN 之文件名
-; 为简化代码, 下面每个字符串的长度均为 MessageLength
-MessageLength		equ	9
-LoadMessage:		db	"Loading  "
-Message1		db	"Ready.   "
-Message2		db	"No KERNEL"
-;============================================================================
+ALIGN	32
+
+[BITS	32]
+
+LABEL_PM_START:
+    ; 初始化寄存器
+	mov	ax, SelectorVideo
+	mov	gs, ax
+	mov	ax, SelectorFlatRW
+	mov	ds, ax
+	mov	es, ax
+	mov	fs, ax
+	mov	ss, ax
+	mov	esp, TopOfStack
+
+	push	szMemChkTitle
+	call	DispStr
+	add	esp, 4
+
+	call	DispMemInfo
+	call	SetupPaging
+
+	call	InitKernel
+
+
+	;***************************************************************
+	jmp	SelectorFlatC:KernelEntryPointPhyAddr	; 正式进入内核 *
+	;***************************************************************
+
+
+
+
+; SECTION .data1 之开始 ---------------------------------------------------------------------------------------------
+[SECTION .data1]
+
+ALIGN	32
+
+LABEL_DATA:
+; 实模式下使用这些符号
+; 字符串
+_szMemChkTitle:			db	"BaseAddrL BaseAddrH LengthLow LengthHigh   Type", 0Ah, 0
+_szRAMSize:			db	"RAM size:", 0
+_szReturn:			db	0Ah, 0
+;; 变量
+_dwMCRNumber:			dd	0	; Memory Check Result
+_dwDispPos:			dd	(80 * 6 + 0) * 2	; 屏幕第 6 行, 第 0 列。
+_dwMemSize:			dd	0
+_ARDStruct:			; Address Range Descriptor Structure
+	_dwBaseAddrLow:		dd	0
+	_dwBaseAddrHigh:	dd	0
+	_dwLengthLow:		dd	0
+	_dwLengthHigh:		dd	0
+	_dwType:		dd	0
+_MemChkBuf:	times	256	db	0
+;
+;; 保护模式下使用这些符号
+szMemChkTitle		equ	BaseOfLoaderPhyAddr + _szMemChkTitle
+szRAMSize		equ	BaseOfLoaderPhyAddr + _szRAMSize
+szReturn		equ	BaseOfLoaderPhyAddr + _szReturn
+dwDispPos		equ	BaseOfLoaderPhyAddr + _dwDispPos
+dwMemSize		equ	BaseOfLoaderPhyAddr + _dwMemSize
+dwMCRNumber		equ	BaseOfLoaderPhyAddr + _dwMCRNumber
+ARDStruct		equ	BaseOfLoaderPhyAddr + _ARDStruct
+	dwBaseAddrLow	equ	BaseOfLoaderPhyAddr + _dwBaseAddrLow
+	dwBaseAddrHigh	equ	BaseOfLoaderPhyAddr + _dwBaseAddrHigh
+	dwLengthLow	equ	BaseOfLoaderPhyAddr + _dwLengthLow
+	dwLengthHigh	equ	BaseOfLoaderPhyAddr + _dwLengthHigh
+	dwType		equ	BaseOfLoaderPhyAddr + _dwType
+MemChkBuf		equ	BaseOfLoaderPhyAddr + _MemChkBuf
+
+
+; 堆栈就在数据段的末尾
+StackSpace:	times	1000h	db	0
+TopOfStack	equ	BaseOfLoaderPhyAddr + $	; 栈顶
+; SECTION .data1 之结束 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+;==================================================================================================================
+; 定义函数
 
 ;----------------------------------------------------------------------------
 ; 函数名: DispStrRealMode
@@ -226,6 +322,7 @@ DispStrRealMode:
 	add	dh, 3			; 从第 3 行往下显示
 	int	10h			; int 10h
 	ret
+
 ;----------------------------------------------------------------------------
 ; 函数名: ReadSector
 ;----------------------------------------------------------------------------
@@ -268,6 +365,7 @@ ReadSector:
 	pop	bp
 
 	ret
+
 
 ;----------------------------------------------------------------------------
 ; 函数名: GetFATEntry
@@ -331,111 +429,6 @@ KillMotor:
 	pop	dx
 	ret
 ;----------------------------------------------------------------------------
-
-
-; 从此以后的代码在保护模式下执行 ----------------------------------------------------
-; 32 位代码段. 由实模式跳入 ---------------------------------------------------------
-[SECTION .s32]
-
-ALIGN	32
-
-[BITS	32]
-
-LABEL_PM_START:
-	mov	ax, SelectorVideo
-	mov	gs, ax
-	mov	ax, SelectorFlatRW
-	mov	ds, ax
-	mov	es, ax
-	mov	fs, ax
-	mov	ss, ax
-	mov	esp, TopOfStack
-
-	push	szMemChkTitle
-	call	DispStr
-	add	esp, 4
-
-	call	DispMemInfo
-	call	SetupPaging
-
-	;mov	ah, 0Fh				; 0000: 黑底    1111: 白字
-	;mov	al, 'P'
-	;mov	[gs:((80 * 0 + 39) * 2)], ax	; 屏幕第 0 行, 第 39 列。
-
-	call	InitKernel
-
-	;jmp	$
-
-	;***************************************************************
-	jmp	SelectorFlatC:KernelEntryPointPhyAddr	; 正式进入内核 *
-	;***************************************************************
-	; 内存看上去是这样的：
-	;              ┃                                    ┃
-	;              ┃                 .                  ┃
-	;              ┃                 .                  ┃
-	;              ┃                 .                  ┃
-	;              ┣━━━━━━━━━━━━━━━━━━┫
-	;              ┃■■■■■■■■■■■■■■■■■■┃
-	;              ┃■■■■■■Page  Tables■■■■■■┃
-	;              ┃■■■■■(大小由LOADER决定)■■■■┃
-	;    00101000h ┃■■■■■■■■■■■■■■■■■■┃ PageTblBase
-	;              ┣━━━━━━━━━━━━━━━━━━┫
-	;              ┃■■■■■■■■■■■■■■■■■■┃
-	;    00100000h ┃■■■■Page Directory Table■■■■┃ PageDirBase  <- 1M
-	;              ┣━━━━━━━━━━━━━━━━━━┫
-	;              ┃□□□□□□□□□□□□□□□□□□┃
-	;       F0000h ┃□□□□□□□System ROM□□□□□□┃
-	;              ┣━━━━━━━━━━━━━━━━━━┫
-	;              ┃□□□□□□□□□□□□□□□□□□┃
-	;       E0000h ┃□□□□Expansion of system ROM □□┃
-	;              ┣━━━━━━━━━━━━━━━━━━┫
-	;              ┃□□□□□□□□□□□□□□□□□□┃
-	;       C0000h ┃□□□Reserved for ROM expansion□□┃
-	;              ┣━━━━━━━━━━━━━━━━━━┫
-	;              ┃□□□□□□□□□□□□□□□□□□┃ B8000h ← gs
-	;       A0000h ┃□□□Display adapter reserved□□□┃
-	;              ┣━━━━━━━━━━━━━━━━━━┫
-	;              ┃□□□□□□□□□□□□□□□□□□┃
-	;       9FC00h ┃□□extended BIOS data area (EBDA)□┃
-	;              ┣━━━━━━━━━━━━━━━━━━┫
-	;              ┃■■■■■■■■■■■■■■■■■■┃
-	;       90000h ┃■■■■■■■LOADER.BIN■■■■■■┃ somewhere in LOADER ← esp
-	;              ┣━━━━━━━━━━━━━━━━━━┫
-	;              ┃■■■■■■■■■■■■■■■■■■┃
-	;       80000h ┃■■■■■■■KERNEL.BIN■■■■■■┃
-	;              ┣━━━━━━━━━━━━━━━━━━┫
-	;              ┃■■■■■■■■■■■■■■■■■■┃
-	;       30000h ┃■■■■■■■■KERNEL■■■■■■■┃ 30400h ← KERNEL 入口 (KernelEntryPointPhyAddr)
-	;              ┣━━━━━━━━━━━━━━━━━━┫
-	;              ┃                                    ┃
-	;        7E00h ┃              F  R  E  E            ┃
-	;              ┣━━━━━━━━━━━━━━━━━━┫
-	;              ┃■■■■■■■■■■■■■■■■■■┃
-	;        7C00h ┃■■■■■■BOOT  SECTOR■■■■■■┃
-	;              ┣━━━━━━━━━━━━━━━━━━┫
-	;              ┃                                    ┃
-	;         500h ┃              F  R  E  E            ┃
-	;              ┣━━━━━━━━━━━━━━━━━━┫
-	;              ┃□□□□□□□□□□□□□□□□□□┃
-	;         400h ┃□□□□ROM BIOS parameter area □□┃
-	;              ┣━━━━━━━━━━━━━━━━━━┫
-	;              ┃◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇┃
-	;           0h ┃◇◇◇◇◇◇Int  Vectors◇◇◇◇◇◇┃
-	;              ┗━━━━━━━━━━━━━━━━━━┛ ← cs, ds, es, fs, ss
-	;
-	;
-	;		┏━━━┓		┏━━━┓
-	;		┃■■■┃ 我们使用 	┃□□□┃ 不能使用的内存
-	;		┗━━━┛		┗━━━┛
-	;		┏━━━┓		┏━━━┓
-	;		┃      ┃ 未使用空间	┃◇◇◇┃ 可以覆盖的内存
-	;		┗━━━┛		┗━━━┛
-	;
-	; 注：KERNEL 的位置实际上是很灵活的，可以通过同时改变 LOAD.INC 中的 KernelEntryPointPhyAddr 和 MAKEFILE 中参数 -Ttext 的值来改变。
-	;     比如，如果把 KernelEntryPointPhyAddr 和 -Ttext 的值都改为 0x400400，则 KERNEL 就会被加载到内存 0x400000(4M) 处，入口在 0x400400。
-	;
-
-
 
 
 ; ------------------------------------------------------------------------
@@ -509,6 +502,7 @@ DispInt:
 
 	ret
 ; DispInt 结束------------------------------------------------------------
+
 
 ; ------------------------------------------------------------------------
 ; 显示一个字符串
@@ -656,6 +650,7 @@ DispMemInfo:
 	ret
 ; ---------------------------------------------------------------------------
 
+
 ; 启动分页机制 --------------------------------------------------------------
 SetupPaging:
 	; 根据内存大小计算应初始化多少PDE以及多少页表
@@ -737,48 +732,3 @@ InitKernel:	; 遍历每一个 Program Header，根据 Program Header 中的信�
 
 	ret
 ; InitKernel ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-; SECTION .data1 之开始 ---------------------------------------------------------------------------------------------
-[SECTION .data1]
-
-ALIGN	32
-
-LABEL_DATA:
-; 实模式下使用这些符号
-; 字符串
-_szMemChkTitle:			db	"BaseAddrL BaseAddrH LengthLow LengthHigh   Type", 0Ah, 0
-_szRAMSize:			db	"RAM size:", 0
-_szReturn:			db	0Ah, 0
-;; 变量
-_dwMCRNumber:			dd	0	; Memory Check Result
-_dwDispPos:			dd	(80 * 6 + 0) * 2	; 屏幕第 6 行, 第 0 列。
-_dwMemSize:			dd	0
-_ARDStruct:			; Address Range Descriptor Structure
-	_dwBaseAddrLow:		dd	0
-	_dwBaseAddrHigh:	dd	0
-	_dwLengthLow:		dd	0
-	_dwLengthHigh:		dd	0
-	_dwType:		dd	0
-_MemChkBuf:	times	256	db	0
-;
-;; 保护模式下使用这些符号
-szMemChkTitle		equ	BaseOfLoaderPhyAddr + _szMemChkTitle
-szRAMSize		equ	BaseOfLoaderPhyAddr + _szRAMSize
-szReturn		equ	BaseOfLoaderPhyAddr + _szReturn
-dwDispPos		equ	BaseOfLoaderPhyAddr + _dwDispPos
-dwMemSize		equ	BaseOfLoaderPhyAddr + _dwMemSize
-dwMCRNumber		equ	BaseOfLoaderPhyAddr + _dwMCRNumber
-ARDStruct		equ	BaseOfLoaderPhyAddr + _ARDStruct
-	dwBaseAddrLow	equ	BaseOfLoaderPhyAddr + _dwBaseAddrLow
-	dwBaseAddrHigh	equ	BaseOfLoaderPhyAddr + _dwBaseAddrHigh
-	dwLengthLow	equ	BaseOfLoaderPhyAddr + _dwLengthLow
-	dwLengthHigh	equ	BaseOfLoaderPhyAddr + _dwLengthHigh
-	dwType		equ	BaseOfLoaderPhyAddr + _dwType
-MemChkBuf		equ	BaseOfLoaderPhyAddr + _MemChkBuf
-
-
-; 堆栈就在数据段的末尾
-StackSpace:	times	1000h	db	0
-TopOfStack	equ	BaseOfLoaderPhyAddr + $	; 栈顶
-; SECTION .data1 之结束 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

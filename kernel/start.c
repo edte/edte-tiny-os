@@ -5,7 +5,8 @@
 PUBLIC void *memcpy(void *pDst, void *pSrc, int iSize);
 PUBLIC void disp_str(char *pszInfo);
 
-PUBLIC u8 gdt_ptr[6]; // 0~15:Limit  16~47:Base
+// 0~15:Limit  16~47:Base
+PUBLIC u8 gdt_ptr[6];
 PUBLIC DESCRIPTOR gdt[GDT_SIZE];
 
 /*======================================================================*
