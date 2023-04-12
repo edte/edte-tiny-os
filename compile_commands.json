@@ -1,0 +1,18 @@
+[
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-I",
+      "include/",
+      "-c",
+      "-m32",
+      "-fno-builtin",
+      "-o",
+      "kernel/start.o",
+      "kernel/start.c"
+    ],
+    "directory": "/home/edte/os",
+    "file": "/home/edte/os/kernel/start.c",
+    "output": "/home/edte/os/kernel/start.o"
+  }
+]
