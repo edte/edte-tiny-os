@@ -7,11 +7,11 @@ LD			= ld
 # Flags
 ASMBFLAGS	= -I boot/include/
 ASMKFLAGS	= -I include/ -f elf
-CFLAGS		= -I include/ -c -m32 -fno-builtin
+CFLAGS		= -I include/ -fno-stack-protector -c -m32 -fno-builtin
 LDFLAGS		= -s -m elf_i386 -Ttext $(ENTRYPOINT)
 
 # objects
-OBJS			= kernel/kernel.o kernel/start.o lib/kliba.o lib/string.o
+OBJS		= kernel/kernel.o kernel/start.o kernel/i8259.o kernel/global.o kernel/protect.o lib/klib.o lib/kliba.o lib/string.o
 
 # targets 
 TARGETBOOT 		= boot/boot.bin
@@ -69,7 +69,21 @@ $(TARGETKERNEL) : $(OBJS)
 kernel/kernel.o : kernel/kernel.asm
 	$(ASM) $(ASMKFLAGS) -o $@ $<
 
-kernel/start.o : kernel/start.c include/type.h include/const.h include/protect.h
+kernel/start.o: kernel/start.c include/type.h include/const.h include/protect.h \
+		include/proto.h include/string.h include/global.h
+	$(CC) $(CFLAGS) -o $@ $<
+
+kernel/i8259.o : kernel/i8259.c include/type.h include/const.h include/protect.h \
+			include/proto.h
+	$(CC) $(CFLAGS) -o $@ $<
+
+kernel/global.o : kernel/global.c
+	$(CC) $(CFLAGS) -o $@ $<
+
+kernel/protect.o : kernel/protect.c
+	$(CC) $(CFLAGS) -o $@ $<
+
+lib/klib.o : lib/klib.c include/global.h
 	$(CC) $(CFLAGS) -o $@ $<
 
 lib/kliba.o : lib/kliba.asm
@@ -96,4 +110,4 @@ help:
 	@echo "  help      Show this help message"
 
 clean :
-	rm -f $(FLOPPYIMAGE) $(TARGETLOADER) $(TARGETBOOT) $(TARGETKERNEL) $(OBJS) 
+	rm -f $(TARGETLOADER) $(TARGETBOOT) $(TARGETKERNEL) $(OBJS) 

@@ -37,9 +37,6 @@ SelectorVideo		equ	LABEL_DESC_VIDEO	- LABEL_GDT + SA_RPL3 ; 显存段选择子
 ; GDT 选择子 ----------------------------------------------------------------------------------
 
 
-; 堆栈基址
-BaseOfStack	equ	0100h
-
 ;============================================================================
 ;变量
 ;----------------------------------------------------------------------------
@@ -48,7 +45,6 @@ wSectorNo		    dw	0		        ; 要读取的扇区号
 bOdd			    db	0		        ; 奇数还是偶数
 dwKernelSize		dd	0		        ; KERNEL.BIN 文件大小
 
-;============================================================================
 ;字符串
 ;----------------------------------------------------------------------------
 KernelFileName		db	"KERNEL  BIN", 0	; KERNEL.BIN 之文件名
@@ -57,8 +53,9 @@ MessageLength		equ	9
 LoadMessage:		db	"Loading  "
 Message1		    db	"Ready.   "
 Message2	    	db	"No KERNEL"
-;============================================================================
 
+; 堆栈基址
+BaseOfStack	equ	0100h
 
 ; <--- 从这里开始 *************
 LABEL_START:
@@ -90,6 +87,7 @@ LABEL_START:
 .MemChkFail:
 	mov	dword [_dwMCRNumber], 0
 .MemChkOK:
+
 
 	; 下面在 A 盘的根目录寻找 KERNEL.BIN
 	mov	word [wSectorNo], SectorNoOfRootDirectory	
@@ -187,8 +185,8 @@ LABEL_GOON_LOADING_FILE:
 	add	ax, DeltaSectorNo
 	add	bx, [BPB_BytsPerSec]
 	jmp	LABEL_GOON_LOADING_FILE
-LABEL_FILE_LOADED:
 
+LABEL_FILE_LOADED:
 	call	KillMotor		; 关闭软驱马达
 
     ; 显示字符串 "Ready."
@@ -196,7 +194,6 @@ LABEL_FILE_LOADED:
 	call	DispStrRealMode		
 	
 ; 下面准备跳入保护模式 -------------------------------------------
-
 ; 加载 GDTR
 	lgdt	[GdtPtr]
 
@@ -217,89 +214,8 @@ LABEL_FILE_LOADED:
 	jmp	dword SelectorFlatC:(BaseOfLoaderPhyAddr+LABEL_PM_START)
 
 
-; 从此以后的代码在保护模式下执行 ----------------------------------------------------
-; 32 位代码段. 由实模式跳入 ---------------------------------------------------------
-[SECTION .s32]
-
-ALIGN	32
-
-[BITS	32]
-
-LABEL_PM_START:
-    ; 初始化寄存器
-	mov	ax, SelectorVideo
-	mov	gs, ax
-	mov	ax, SelectorFlatRW
-	mov	ds, ax
-	mov	es, ax
-	mov	fs, ax
-	mov	ss, ax
-	mov	esp, TopOfStack
-
-	push	szMemChkTitle
-	call	DispStr
-	add	esp, 4
-
-	call	DispMemInfo
-	call	SetupPaging
-
-	call	InitKernel
-
-
-	;***************************************************************
-	jmp	SelectorFlatC:KernelEntryPointPhyAddr	; 正式进入内核 *
-	;***************************************************************
-
-
-
-
-; SECTION .data1 之开始 ---------------------------------------------------------------------------------------------
-[SECTION .data1]
-
-ALIGN	32
-
-LABEL_DATA:
-; 实模式下使用这些符号
-; 字符串
-_szMemChkTitle:			db	"BaseAddrL BaseAddrH LengthLow LengthHigh   Type", 0Ah, 0
-_szRAMSize:			db	"RAM size:", 0
-_szReturn:			db	0Ah, 0
-;; 变量
-_dwMCRNumber:			dd	0	; Memory Check Result
-_dwDispPos:			dd	(80 * 6 + 0) * 2	; 屏幕第 6 行, 第 0 列。
-_dwMemSize:			dd	0
-_ARDStruct:			; Address Range Descriptor Structure
-	_dwBaseAddrLow:		dd	0
-	_dwBaseAddrHigh:	dd	0
-	_dwLengthLow:		dd	0
-	_dwLengthHigh:		dd	0
-	_dwType:		dd	0
-_MemChkBuf:	times	256	db	0
-;
-;; 保护模式下使用这些符号
-szMemChkTitle		equ	BaseOfLoaderPhyAddr + _szMemChkTitle
-szRAMSize		equ	BaseOfLoaderPhyAddr + _szRAMSize
-szReturn		equ	BaseOfLoaderPhyAddr + _szReturn
-dwDispPos		equ	BaseOfLoaderPhyAddr + _dwDispPos
-dwMemSize		equ	BaseOfLoaderPhyAddr + _dwMemSize
-dwMCRNumber		equ	BaseOfLoaderPhyAddr + _dwMCRNumber
-ARDStruct		equ	BaseOfLoaderPhyAddr + _ARDStruct
-	dwBaseAddrLow	equ	BaseOfLoaderPhyAddr + _dwBaseAddrLow
-	dwBaseAddrHigh	equ	BaseOfLoaderPhyAddr + _dwBaseAddrHigh
-	dwLengthLow	equ	BaseOfLoaderPhyAddr + _dwLengthLow
-	dwLengthHigh	equ	BaseOfLoaderPhyAddr + _dwLengthHigh
-	dwType		equ	BaseOfLoaderPhyAddr + _dwType
-MemChkBuf		equ	BaseOfLoaderPhyAddr + _MemChkBuf
-
-
-; 堆栈就在数据段的末尾
-StackSpace:	times	1000h	db	0
-TopOfStack	equ	BaseOfLoaderPhyAddr + $	; 栈顶
-; SECTION .data1 之结束 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-;==================================================================================================================
-; 定义函数
+;=======================================================================================================
+; 实模式下使用的函数
 
 ;----------------------------------------------------------------------------
 ; 函数名: DispStrRealMode
@@ -312,16 +228,17 @@ DispStrRealMode:
 	mov	ax, MessageLength
 	mul	dh
 	add	ax, LoadMessage
-	mov	bp, ax			; ┓
-	mov	ax, ds			; ┣ ES:BP = 串地址
-	mov	es, ax			; ┛
+	mov	bp, ax	    		; ┓
+	mov	ax, ds	    		; ┣ ES:BP = 串地址
+	mov	es, ax	    		; ┛
 	mov	cx, MessageLength	; CX = 串长度
-	mov	ax, 01301h		; AH = 13,  AL = 01h
-	mov	bx, 0007h		; 页号为0(BH = 0) 黑底白字(BL = 07h)
+	mov	ax, 01301h		    ; AH = 13,  AL = 01h
+	mov	bx, 0007h		    ; 页号为0(BH = 0) 黑底白字(BL = 07h)
 	mov	dl, 0
-	add	dh, 3			; 从第 3 行往下显示
-	int	10h			; int 10h
+	add	dh, 3			    ; 从第 3 行往下显示
+	int	10h		        	; int 10h
 	ret
+
 
 ;----------------------------------------------------------------------------
 ; 函数名: ReadSector
@@ -431,7 +348,94 @@ KillMotor:
 ;----------------------------------------------------------------------------
 
 
-; ------------------------------------------------------------------------
+;===============================================================================================================
+; 从此以后的代码在保护模式下执行 ----------------------------------------------------
+; 32 位代码段. 由实模式跳入 ---------------------------------------------------------
+[SECTION .s32]
+
+ALIGN	32
+
+[BITS	32]
+
+LABEL_PM_START:
+    ; 初始化寄存器
+	mov	ax, SelectorVideo
+	mov	gs, ax
+	mov	ax, SelectorFlatRW
+	mov	ds, ax
+	mov	es, ax
+	mov	fs, ax
+	mov	ss, ax
+	mov	esp, TopOfStack
+
+	push	szMemChkTitle
+	call	DispStr
+	add	esp, 4
+
+	call	DispMemInfo
+	call	SetupPaging
+	call	InitKernel
+
+	;***************************************************************
+	jmp	SelectorFlatC:KernelEntryPointPhyAddr	; 正式进入内核 *
+	;***************************************************************
+
+
+;==========================================================================================================================
+; 数据段
+; SECTION .data1 之开始 ---------------------------------------------------------------------------------------------
+[SECTION .data1]
+
+ALIGN	32
+
+LABEL_DATA:
+; 实模式下使用这些符号
+; 字符串
+_szMemChkTitle:			db	"BaseAddrL BaseAddrH LengthLow LengthHigh   Type", 0Ah, 0
+_szRAMSize:	       		db	"RAM size:", 0
+_szReturn:		    	db	0Ah, 0
+;; 变量
+_dwMCRNumber:			dd	0	; Memory Check Result
+_dwDispPos:		    	dd	(80 * 6 + 0) * 2	; 屏幕第 6 行, 第 0 列。
+_dwMemSize:		    	dd	0
+_ARDStruct:		    	; Address Range Descriptor Structure
+_dwBaseAddrLow:		    dd	0
+_dwBaseAddrHigh:	    dd	0
+_dwLengthLow:		    dd	0
+_dwLengthHigh:		    dd	0
+_dwType:	    	    dd	0
+_MemChkBuf:	times	256	db	0
+;
+;; 保护模式下使用这些符号
+szMemChkTitle		equ	BaseOfLoaderPhyAddr + _szMemChkTitle
+szRAMSize	    	equ	BaseOfLoaderPhyAddr + _szRAMSize
+szReturn	    	equ	BaseOfLoaderPhyAddr + _szReturn
+dwDispPos	    	equ	BaseOfLoaderPhyAddr + _dwDispPos
+dwMemSize	    	equ	BaseOfLoaderPhyAddr + _dwMemSize
+dwMCRNumber	    	equ	BaseOfLoaderPhyAddr + _dwMCRNumber
+ARDStruct	    	equ	BaseOfLoaderPhyAddr + _ARDStruct
+dwBaseAddrLow	    equ	BaseOfLoaderPhyAddr + _dwBaseAddrLow
+dwBaseAddrHigh	    equ	BaseOfLoaderPhyAddr + _dwBaseAddrHigh
+dwLengthLow	        equ	BaseOfLoaderPhyAddr + _dwLengthLow
+dwLengthHigh	    equ	BaseOfLoaderPhyAddr + _dwLengthHigh
+dwType		        equ	BaseOfLoaderPhyAddr + _dwType
+MemChkBuf		    equ	BaseOfLoaderPhyAddr + _MemChkBuf
+
+; 堆栈就在数据段的末尾
+StackSpace:	times	1000h	db	0
+TopOfStack	equ	BaseOfLoaderPhyAddr + $	; 栈顶
+; SECTION .data1 之结束 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+;======================================================================================
+; 定义一些函数
+; 注意，后面的函数都是在保护模式下的，不能和前面的函数放在一起（高级语言写多了以为没区别）
+; 但是在这里，前面和后面的内存区域都不同，一个实模式，一个保护模式，是不同的
+
+;----------------------------------------------------------------------------
+; 函数名: DispAl 
+;----------------------------------------------------------------------------
+; 作用:
 ; 显示 AL 中的数字
 ; ------------------------------------------------------------------------
 DispAL:
@@ -472,7 +476,10 @@ DispAL:
 ; DispAL 结束-------------------------------------------------------------
 
 
-; ------------------------------------------------------------------------
+;----------------------------------------------------------------------------
+; 函数名: DispInt
+;----------------------------------------------------------------------------
+; 作用:
 ; 显示一个整形数
 ; ------------------------------------------------------------------------
 DispInt:
@@ -504,7 +511,10 @@ DispInt:
 ; DispInt 结束------------------------------------------------------------
 
 
-; ------------------------------------------------------------------------
+;----------------------------------------------------------------------------
+; 函数名: DispStr
+;----------------------------------------------------------------------------
+; 作用:
 ; 显示一个字符串
 ; ------------------------------------------------------------------------
 DispStr:
@@ -549,7 +559,10 @@ DispStr:
 	ret
 ; DispStr 结束------------------------------------------------------------
 
-; ------------------------------------------------------------------------
+;----------------------------------------------------------------------------
+; 函数名: DispReturn
+;----------------------------------------------------------------------------
+; 作用:
 ; 换行
 ; ------------------------------------------------------------------------
 DispReturn:
@@ -561,7 +574,10 @@ DispReturn:
 ; DispReturn 结束---------------------------------------------------------
 
 
-; ------------------------------------------------------------------------
+;----------------------------------------------------------------------------
+; 函数名: MemCpy
+;----------------------------------------------------------------------------
+; 作用:
 ; 内存拷贝，仿 memcpy
 ; ------------------------------------------------------------------------
 ; void* MemCpy(void* es:pDest, void* ds:pSrc, int iSize);
@@ -604,6 +620,10 @@ MemCpy:
 
 
 
+;----------------------------------------------------------------------------
+; 函数名: DispMemInfo
+;----------------------------------------------------------------------------
+; 作用:
 ; 显示内存信息 --------------------------------------------------------------
 DispMemInfo:
 	push	esi
@@ -651,6 +671,10 @@ DispMemInfo:
 ; ---------------------------------------------------------------------------
 
 
+;----------------------------------------------------------------------------
+; 函数名: SetupPaging
+;----------------------------------------------------------------------------
+; 作用:
 ; 启动分页机制 --------------------------------------------------------------
 SetupPaging:
 	; 根据内存大小计算应初始化多少PDE以及多少页表
@@ -705,6 +729,10 @@ SetupPaging:
 
 
 
+;----------------------------------------------------------------------------
+; 函数名: InitKernel
+;----------------------------------------------------------------------------
+; 作用:
 ; InitKernel ---------------------------------------------------------------------------------
 ; 将 KERNEL.BIN 的内容经过整理对齐后放到新的位置
 ; --------------------------------------------------------------------------------------------

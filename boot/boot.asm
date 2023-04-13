@@ -2,7 +2,6 @@
 ;先指定第一条指令的位置，这个是引导扇区默认的起始位置
 org 07c00h
 
-;================================================================================================
 ;然后跳转到启动指令，开始引导, 即主函数
 jmp short LABEL_START
 nop				;这个 nop 不可少
@@ -10,6 +9,7 @@ nop				;这个 nop 不可少
 ;============================================================================
 %include    "load.inc"       ;使用到的其他地址
 %include	"fat12hdr.inc"   ;fat12 文件系统格式，磁盘默认格式化使用到的
+
 
 ;引导扇区使用的堆栈基址, Boot状态下堆栈基地址(栈底, 从这个位置向低地址生长)
 BaseOfStack		        equ	07c00h
@@ -21,7 +21,6 @@ wRootDirSizeForLoop	dw	RootDirSectors  	; Root Directory 占用的扇区数, 在
 wSectorNo	    	dw	0	            	; 要读取的扇区号
 bOdd		    	db	0	            	; 奇数还是偶数
 
-;============================================================================
 ;字符串
 ;----------------------------------------------------------------------------
 LoaderFileName		db	"LOADER  BIN", 0	; LOADER.BIN 之文件名
@@ -30,7 +29,6 @@ MessageLength		equ	9
 BootMessage:		db	"Booting  "; 9字节, 不够则用空格补齐. 序号 0
 Message1	    	db	"Ready.   "; 9字节, 不够则用空格补齐. 序号 1
 Message2	    	db	"No LOADER"; 9字节, 不够则用空格补齐. 序号 2
-;============================================================================
 
 
 LABEL_START:	
@@ -60,12 +58,12 @@ LABEL_START:
 	mov	word [wSectorNo], SectorNoOfRootDirectory
 LABEL_SEARCH_IN_ROOT_DIR_BEGIN:
 	cmp	word [wRootDirSizeForLoop], 0	; ┓
-	jz	LABEL_NO_LOADERBIN		; ┣ 判断根目录区是不是已经读完
-	dec	word [wRootDirSizeForLoop]	; ┛ 如果读完表示没有找到 LOADER.BIN
+	jz	LABEL_NO_LOADERBIN	        	; ┣ 判断根目录区是不是已经读完
+	dec	word [wRootDirSizeForLoop]  	; ┛ 如果读完表示没有找到 LOADER.BIN
 	mov	ax, BaseOfLoader
-	mov	es, ax			; es <- BaseOfLoader
+	mov	es, ax		    	; es <- BaseOfLoader
 	mov	bx, OffsetOfLoader	; bx <- OffsetOfLoader	于是, es:bx = BaseOfLoader:OffsetOfLoader
-	mov	ax, [wSectorNo]	; ax <- Root Directory 中的某 Sector 号
+	mov	ax, [wSectorNo] 	; ax <- Root Directory 中的某 Sector 号
 	mov	cl, 1
 	call	ReadSector
 
@@ -145,7 +143,6 @@ LABEL_FILE_LOADED:
     ; 显示字符串"Ready."
 	mov	dh, 1			     
 	call	DispStr			
-
 
     ; 这一句正式跳转到已加载到内存中的 LOADER.BIN 的开始处
 	; 开始执行 LOADER.BIN 的代码,Boot Sector 的使命到此结束
